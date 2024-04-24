@@ -6,6 +6,8 @@
 #define PAGE_SIZE       256
 #define PAGE_ALIGN(x)   (((x) + PAGE_SIZE - 1) & -PAGE_SIZE)
 
+#define UC_AVR_REG_SREG_H_BIT 5
+
 enum {
     ADDR__init__,
     ADDR_test_func,
@@ -257,6 +259,36 @@ static void test_avr_full_exec(void)
     OK(uc_close(uc));
 }
 
+static void cpu_set_des_encrypt_mode(uc_engine *uc, int encrypt_mode)
+{
+    uint8_t sreg;
+    OK(uc_reg_read(uc, UC_AVR_REG_SREG, &sreg));
+    sreg &= ~(1U << UC_AVR_REG_SREG_H_BIT);
+    sreg |= (!encrypt_mode) << UC_AVR_REG_SREG_H_BIT;
+    OK(uc_reg_write(uc, UC_AVR_REG_SREG, &sreg));
+}
+
+static void cpu_set_des_key(uc_engine *uc, const uint8_t key[8])
+{
+    for (int i = 0; i < 8; i++) {
+        OK(uc_reg_write(uc, UC_AVR_REG_R15-i, &key[i]));
+    }
+}
+
+static void cpu_set_des_data(uc_engine *uc, const uint8_t data[8])
+{
+    for (int i = 0; i < 8; i++) {
+        OK(uc_reg_write(uc, UC_AVR_REG_R7-i, &data[i]));
+    }
+}
+
+static void cpu_get_des_data(uc_engine *uc, uint8_t data[8])
+{
+    for (int i = 0; i < 8; i++) {
+        OK(uc_reg_read(uc, UC_AVR_REG_R7-i, &data[i]));
+    }
+}
+
 static void test_avr_xmega_des(void)
 {
     uint8_t code[16*2 + 2], *code_ptr = code;
@@ -269,6 +301,30 @@ static void test_avr_xmega_des(void)
 
     uc_engine *uc = NULL;
     uc_common_setup(&uc, UC_CPU_AVR_ATXMEGA16A4, code, sizeof(code));
+
+    uint8_t des_output[8];
+    static const uint8_t des_key[8] =
+        { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef };
+    static const uint8_t plaintext[8] =
+        { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xe7 };
+    static const uint8_t ciphertext[8] =
+        { 0xc9, 0x57, 0x44, 0x25, 0x6a, 0x5e, 0xd3, 0x1d };
+
+    // Encrypt
+    cpu_set_des_encrypt_mode(uc, 1);
+    cpu_set_des_key(uc, des_key);
+    cpu_set_des_data(uc, plaintext);
+    OK(uc_emu_start(uc, 0, sizeof(code) - 2, 0, 0));
+    cpu_get_des_data(uc, des_output);
+    TEST_CHECK(memcmp(des_output, ciphertext, sizeof(des_output)) == 0);
+
+    // Decrypt
+    cpu_set_des_encrypt_mode(uc, 0);
+    cpu_set_des_key(uc, des_key);
+    cpu_set_des_data(uc, ciphertext);
+    OK(uc_emu_start(uc, 0, sizeof(code) - 2, 0, 0));
+    cpu_get_des_data(uc, des_output);
+    TEST_CHECK(memcmp(des_output, plaintext, sizeof(des_output)) == 0);
 
     OK(uc_close(uc));
 }
